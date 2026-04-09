@@ -1,6 +1,7 @@
 """Character sheet — hardware resource allocation and planning."""
 import yaml
 
+
 class CharacterSheet:
     def __init__(self, config: dict):
         self.config = config
@@ -10,94 +11,109 @@ class CharacterSheet:
         self.io = config.get("io", {})
         self.profile = config.get("profile", "unknown")
         self.role = config.get("role", "system-designer")
-    
+
     def display(self):
-        """Show the character sheet in a readable format."""
+        """Show the character sheet."""
         from rich.console import Console
         from rich.table import Table
         from rich.panel import Panel
-        
+
         console = Console()
-        
+
         console.print(Panel(
-            f"[bold cyan]Deckboss v0.1.0[/] — {self.profile} — {self.role}",
-            subtitle=self.hw.get("device", "Unknown device")
-        ))
-        
+            f"[bold cyan]Deckboss[/] — [cyan]{self.profile}[/] — {self.role}",
+            subtitle=self.hw.get("device", "Unknown device")))
+
         # Hardware
-        hw_table = Table(title="Hardware")
-        hw_table.add_column("Resource", style="bold")
-        hw_table.add_column("Value")
-        hw_table.add_row("Device", self.hw.get("device", "Unknown"))
-        hw_table.add_row("RAM", f"{self.hw.get('ram_gb', '?')} GB")
-        hw_table.add_row("VRAM", f"{self.hw.get('vram_gb', 'N/A')} GB")
-        hw_table.add_row("Storage", self.hw.get("storage", "~/.deckboss"))
-        detected = self.hw.get("detected", {})
-        if detected:
-            for k, v in detected.items():
-                hw_table.add_row(k, str(v))
-        console.print(hw_table)
-        
+        hw = Table(title="Hardware")
+        hw.add_column("Resource", style="bold")
+        hw.add_column("Value")
+        hw.add_row("Device", self.hw.get("device", "?"))
+        hw.add_row("RAM", f"{self.hw.get('ram_gb', '?')} GB")
+        gpu_val = self.hw.get("gpu_gb", 0)
+        if gpu_val:
+            mem_type = "shared" if self.hw.get("shared_memory") else "dedicated"
+            hw.add_row("GPU", f"{gpu_val} GB ({mem_type})")
+        else:
+            hw.add_row("GPU", "CPU-only mode")
+        hw.add_row("CUDA", str(self.hw.get("cuda", False)))
+        hw.add_row("Storage", self.hw.get("storage", "~/.deckboss"))
+        for k, v in self.hw.get("detected", {}).items():
+            hw.add_row(k.capitalize(), str(v))
+        console.print(hw)
+
         # Resource plan
-        rp_table = Table(title="Resource Plan")
-        rp_table.add_column("Setting", style="bold")
-        rp_table.add_column("Value")
-        rp_table.add_row("Model Engine", self.resources.get("model_engine", "ollama"))
-        rp_table.add_row("Pipeline", self.resources.get("pipeline_mode", "serial"))
-        rp_table.add_row("Max GPU Model", f"{self.resources.get('max_gpu_model_size_gb', '?')} GB")
-        console.print(rp_table)
-        
+        rp = Table(title="Resource Plan")
+        rp.add_column("Setting", style="bold")
+        rp.add_column("Value")
+        rp.add_row("Engine", self.resources.get("model_engine", "ollama"))
+        rp.add_row("Pipeline", self.resources.get("pipeline", self.resources.get("pipeline_mode", "serial")))
+        max_gb = self.resources.get("max_model_gb", self.resources.get("max_gpu_model_size_gb", "?"))
+        rp.add_row("Max Model", f"{max_gb} GB")
+        console.print(rp)
+
         # Models
         if self.models:
-            m_table = Table(title="Models")
-            m_table.add_column("Role", style="bold")
-            m_table.add_column("Engine")
-            m_table.add_column("Source")
-            m_table.add_column("Model")
-            m_table.add_column("Priority")
+            mt = Table(title="Models")
+            mt.add_column("Role", style="bold")
+            mt.add_column("Engine")
+            mt.add_column("Source")
+            mt.add_column("Model")
+            mt.add_column("Priority")
             for role, cfg in sorted(self.models.items(), key=lambda x: x[1].get("priority", 99)):
-                m_table.add_row(
-                    role,
-                    cfg.get("engine", "?"),
-                    cfg.get("source", "?"),
-                    cfg.get("model", "?"),
-                    str(cfg.get("priority", "?"))
-                )
-            console.print(m_table)
-        
+                mt.add_row(role, cfg.get("engine", "?"), cfg.get("source", "?"),
+                           cfg.get("model", "?"), str(cfg.get("priority", "?")))
+            console.print(mt)
+
         # I/O
-        io_table = Table(title="Input/Output")
-        io_table.add_column("Channel", style="bold")
-        io_table.add_column("Type")
-        io_table.add_row("Primary", self.io.get("primary", "terminal"))
-        for sec in self.io.get("secondary", []):
-            io_table.add_row(sec.get("type", "?"), str(sec))
-        console.print(io_table)
-    
+        iot = Table(title="I/O")
+        iot.add_column("Channel", style="bold")
+        iot.add_column("Type")
+        iot.add_row("Primary", self.io.get("primary", "terminal"))
+        for ch in self.io.get("secondary", []):
+            iot.add_row(ch.get("type", "?"), str(ch.get("port", ch.get("env", ""))))
+        console.print(iot)
+
     def get_primary_model(self) -> dict:
-        """Get the highest-priority model configuration."""
         if not self.models:
             return {}
         return min(self.models.values(), key=lambda m: m.get("priority", 99))
-    
+
     def get_model_for_task(self, task: str) -> dict:
-        """Select the best model for a given task type."""
-        task_lower = task.lower()
-        
-        # Reasoning tasks
-        if any(w in task_lower for w in ["design", "plan", "architect", "reason", "analyze"]):
+        """Select best model for a task type."""
+        tl = task.lower()
+
+        # Reasoning tasks → use reasoning model
+        if any(w in tl for w in ["design", "plan", "architect", "analyze", "why", "how should"]):
             if "reasoning" in self.models:
                 return self.models["reasoning"]
-        
-        # Fast tasks
-        if any(w in task_lower for w in ["quick", "simple", "chat", "summarize"]):
+
+        # Quick tasks → use fast model
+        if any(w in tl for w in ["quick", "simple", "summarize", "short"]):
             if "fast" in self.models:
                 return self.models["fast"]
-        
+
         # STT
-        if "transcribe" in task_lower or "speech" in task_lower:
+        if "transcribe" in tl or "speech" in tl:
             if "stt" in self.models:
                 return self.models["stt"]
-        
-        # Default to primary
+
         return self.get_primary_model()
+
+    def to_dict(self) -> dict:
+        """Export as plain dict."""
+        return {
+            "hardware": self.hw,
+            "resource_plan": self.resources,
+            "models": self.models,
+            "io": self.io,
+            "profile": self.profile,
+            "role": self.role,
+        }
+
+    @classmethod
+    def from_file(cls, path: str) -> "CharacterSheet":
+        """Load from YAML file."""
+        import yaml
+        with open(path) as f:
+            return cls(yaml.safe_load(f) or {})
